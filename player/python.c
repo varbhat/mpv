@@ -75,8 +75,8 @@ typedef struct {
     struct MPContext *mpctx;
     struct mp_log *log;
     PyObject* mpv_module;
-    char *last_error_str;
     struct stats_ctx *stats;
+
 } PyScriptCtx;
 
 static PyTypeObject PyScriptCtx_Type = {
@@ -86,9 +86,6 @@ static PyTypeObject PyScriptCtx_Type = {
     .tp_flags = Py_TPFLAGS_DEFAULT,
     .tp_doc = "script_ctx object",
 };
-
-
-
 
 // mpv python module
 static struct PyModuleDef mpv_module_def = {
@@ -109,7 +106,6 @@ static int s_load_python(struct mp_script_args *args)
     ctx->client = args->client;
     ctx->mpctx = args->mpctx;
     ctx->log = args->log;
-    ctx->last_error_str = talloc_strdup(ctx, "Cannot initialize Python");
     ctx->filename = args->filename;
     ctx->path = args->path;
     ctx->stats = stats_ctx_create(ctx, args->mpctx->global,
@@ -132,7 +128,7 @@ static int s_load_python(struct mp_script_args *args)
 
 error_out:
     if (r)
-        MP_FATAL(ctx, "%s\n", ctx->last_error_str);
+        MP_FATAL(ctx, "%s\n", "Python Initialization Error");
     if (Py_IsInitialized())
         Py_Finalize();
 
@@ -146,6 +142,16 @@ error_out:
  *  Main mp.* scripting APIs and helpers
  *********************************************************************/
 
+ static PyObject* check_error(PyObject* self, int err)
+{
+    if (err >= 0) {
+        Py_RETURN_TRUE;
+    }
+    PyErr_SetString(PyExc_Exception, mpv_error_string(err));
+    Py_RETURN_NONE;
+}
+
+
 // dummy function template
 static PyObject* script_dummy(PyObject* self, PyObject* args)
 {
@@ -158,14 +164,10 @@ static PyObject* script_dummy(PyObject* self, PyObject* args)
 
 
     int res = 0; // do work
-    if(res < 0) {
-        PyErr_SetString(PyExc_Exception, mpv_error_string(res));
-        return NULL;
-    }
-
-    Py_RETURN_NONE;
+    return check_error(self, res);
 }
 
+/**************************************************************************************************/
 // args: log level, varargs
 static PyObject* script_log(PyObject* self, PyObject* args)
 {
@@ -183,7 +185,7 @@ static PyObject* script_log(PyObject* self, PyObject* args)
     int length = PyList_Size(list_obj);
 
     if(length<1) {
-        PyErr_SetString(PyExc_TypeError, "Argument must be a list of strings");
+        PyErr_SetString(PyExc_TypeError, "Insufficient Args");
         return NULL;
     }
 
@@ -266,7 +268,6 @@ static PyObject* script_request_event(PyObject* self, PyObject* args)
     Py_RETURN_NONE;
 }
 
-
 // args: list of strings
 static PyObject* script_commandv(PyObject* self, PyObject* args) 
 {
@@ -305,12 +306,7 @@ static PyObject* script_commandv(PyObject* self, PyObject* args)
     arglist[length] = NULL;
 
     int res = mpv_command(ctx->client, arglist);
-    if(res < 0) {
-        PyErr_SetString(PyExc_Exception, mpv_error_string(res));
-        return NULL;
-    }
-
-    Py_RETURN_NONE;
+    return check_error(self, res);
 }
 
 // args: two strings
@@ -325,19 +321,10 @@ static PyObject* script_set_property(PyObject* self, PyObject* args)
         return NULL;
 
     int res = mpv_set_property_string(ctx->client, p, v);
-
-    if(res < 0) {
-        PyErr_SetString(PyExc_Exception, mpv_error_string(res));
-        return NULL;
-    }
-
-    Py_RETURN_NONE;
+    return check_error(self, res);
 }
 
-
-
-
-
+// args: string
 static PyObject* script_del_property(PyObject* self, PyObject* args)
 {
     PyScriptCtx *ctx= (PyScriptCtx *)self;
@@ -348,35 +335,10 @@ static PyObject* script_del_property(PyObject* self, PyObject* args)
         return NULL;
 
 
-    int res = mpv_del_property(ctx->client, p); // do work
-    if(res < 0) {
-        PyErr_SetString(PyExc_Exception, mpv_error_string(res));
-        return NULL;
-    }
-
-    Py_RETURN_NONE;
+    int res = mpv_del_property(ctx->client, p); 
+    return check_error(self, res);
 }
-
-static PyObject* script_set_property(PyObject* self, PyObject* args)
-{
-    PyScriptCtx *ctx= (PyScriptCtx *)self;
-
-    const char *p;
-    const char *v;
-
-    if (!PyArg_ParseTuple(args, "ss", &p, &v))
-        return NULL;
-
-
-    int res = 0; // do work
-    if(res < 0) {
-        PyErr_SetString(PyExc_Exception, mpv_error_string(res));
-        return NULL;
-    }
-
-    Py_RETURN_NONE;
-}
-
+/************************************************************************************************/
 
 // main export of this file, used by cplayer to load js scripts
 const struct mp_scripting mp_scripting_py = {
