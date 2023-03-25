@@ -609,6 +609,15 @@ if features['javascript']
     subdir(join_paths('generated', 'player', 'javascript'))
 endif
 
+
+python3 = dependency('python3-embed', version: '>= 3.10', required: get_option('python'))
+features += {'python': python3.found()}
+if features['python']
+    dependencies += python3
+    sources += files('player/python.c')
+    subdir(join_paths('generated', 'player', 'python'))
+endif
+
 lcms2 = dependency('lcms2', version: '>= 2.6', required: get_option('lcms2'))
 features += {'lcms2': lcms2.found()}
 if features['lcms2']
@@ -1739,6 +1748,7 @@ summary({'d3d11': features['d3d11'],
          'javascript': features['javascript'],
          'libmpv': get_option('libmpv'),
          'lua': features['lua'],
+         'python': features['python'],
          'opengl': features['gl'],
          'vulkan': features['vulkan'],
          'wayland': features['wayland'],
