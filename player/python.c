@@ -28,6 +28,7 @@
 #include <Python.h>
 
 #include "boolobject.h"
+#include "longobject.h"
 #include "object.h"
 #include "osdep/io.h"
 
@@ -268,6 +269,40 @@ static PyObject* script_request_event(PyObject* self, PyObject* args)
     Py_RETURN_NONE;
 }
 
+
+// args: string
+static PyObject* script_enable_messagess(PyObject* self, PyObject* args)
+{
+    PyScriptCtx *ctx= (PyScriptCtx *)self;
+
+    const char *level;
+
+    if (!PyArg_ParseTuple(args, "s", &level))
+        return NULL;
+
+
+    int res = mpv_request_log_messages(ctx->client, level); 
+    if (res == MPV_ERROR_INVALID_PARAMETER) {
+        PyErr_SetString(PyExc_Exception, "Invalid Log Error");
+        return NULL;
+    }
+    return check_error(self, res);
+}
+
+// args: string
+static PyObject* script_command(PyObject* self, PyObject* args)
+{
+    PyScriptCtx *ctx= (PyScriptCtx *)self;
+
+    const char *s;
+
+    if (!PyArg_ParseTuple(args, "s", &s))
+        return NULL;
+
+    int res = mpv_command_string(ctx->client, s); 
+    return check_error(self, res);
+}
+
 // args: list of strings
 static PyObject* script_commandv(PyObject* self, PyObject* args) 
 {
@@ -338,6 +373,83 @@ static PyObject* script_del_property(PyObject* self, PyObject* args)
     int res = mpv_del_property(ctx->client, p); 
     return check_error(self, res);
 }
+
+static PyObject* script_enable_messages(PyObject* self, PyObject* args)
+{
+    PyScriptCtx *ctx= (PyScriptCtx *)self;
+
+    const char *level;
+
+    if (!PyArg_ParseTuple(args, "s", &level))
+        return NULL;
+
+
+    int r = mpv_request_log_messages(ctx->client, level);
+    if (r == MPV_ERROR_INVALID_PARAMETER) {
+        PyErr_SetString(PyExc_Exception, "Invalid log level");
+        Py_RETURN_NONE;
+    }
+    return check_error(self, r);
+}
+
+static PyObject* script_set_property_native(PyObject* self, PyObject* args)
+{
+    PyScriptCtx *ctx= (PyScriptCtx *)self;
+
+    const char *p;
+
+    if (!PyArg_ParseTuple(args, "s", &p))
+        return NULL;
+
+
+    int res = 0; // do work
+    return check_error(self, res);
+}
+
+
+
+
+// AGAIN
+// args: string,bool
+static PyObject* script_set_property_bool(PyObject* self, PyObject* args) 
+{
+    PyScriptCtx *ctx= (PyScriptCtx *)self;
+
+    const char *p;
+    bool v;
+
+    if (!PyArg_ParseTuple(args, "sp", &p, &v))
+        return NULL;
+
+    int res = mpv_set_property(ctx->client, p, MPV_FORMAT_FLAG, &v);
+    return check_error(self, res);
+}
+
+//AGAIN
+// args: name
+static PyObject* script_get_property_number(PyObject* self, PyObject* args) 
+{
+    PyScriptCtx *ctx= (PyScriptCtx *)self;
+
+    double result;
+    const char* name;
+
+    if (!PyArg_ParseTuple(args, "s", &name))
+        return NULL;
+
+    int err = mpv_get_property(ctx->client, name, MPV_FORMAT_DOUBLE, &result);
+    if(err >= 0) {
+        return PyLong_FromDouble(result);
+    } else {
+        //TODO
+        PyErr_SetString(PyExc_Exception, mpv_error_string(err));
+        Py_RETURN_NONE;
+    }
+}
+
+
+
+
 /************************************************************************************************/
 
 // main export of this file, used by cplayer to load js scripts
