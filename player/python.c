@@ -134,9 +134,9 @@ setup(PyObject *self, PyObject *args)
 
 
 static PyMethodDef PyMpv_methods[] = {
-    {"setup", (PyCFunction)setup, METH_VARARGS,            /* METH_VARARGS | METH_KEYWORDS (PyObject *self, PyObject *args, PyObject **kwargs) */
+    {"setup", (PyCFunction)setup, METH_VARARGS,
      PyDoc_STR("Just a test method to see if extending is working.")},
-    {NULL, NULL, 0, NULL}                                       /* Sentinal */
+    {NULL, NULL, 0, NULL}                                                 /* Sentinal */
 };
 
 
@@ -196,16 +196,15 @@ mpv_extension_ok(PyObject *self, PyObject *args)
 
 
 static PyMethodDef Mpv_methods[] = {
-    {"extension_ok", (PyCFunction)mpv_extension_ok, METH_VARARGS,            /* METH_VARARGS | METH_KEYWORDS (PyObject *self, PyObject *args, PyObject **kwargs) */
+    {"extension_ok", (PyCFunction)mpv_extension_ok, METH_VARARGS,             /* METH_VARARGS | METH_KEYWORDS (PyObject *self, PyObject *args, PyObject **kwargs) */
      PyDoc_STR("Just a test method to see if extending is working.")},
-    {NULL, NULL, 0, NULL}                                       /* Sentinal */
+    {NULL, NULL, 0, NULL}                                                     /* Sentinal */
 };
 
 
 static int
 pympv_exec(PyObject *m)
 {
-    printf("called pympv_exec\n");
     if (PyType_Ready(&PyMpv_Type) < 0)
         return -1;
 
@@ -245,7 +244,6 @@ static struct PyModuleDef mpv_module_def = {
 PyMODINIT_FUNC
 PyInit_mpv(void)
 {
-    printf("%s\n", "called: 'import mpv'");
     return PyModuleDef_Init(&mpv_module_def);
 }
 
