@@ -101,6 +101,7 @@ typedef struct {
     PyObject_HEAD
     PyObject        *pympv_attr;
     struct mpv_handle *client;
+    struct mp_log *log;
 } PyMpvObject;
 
 static PyTypeObject PyMpv_Type;
@@ -179,7 +180,7 @@ PyMpv_setattr(PyMpvObject *self, const char *name, PyObject *v)
 
 static PyTypeObject PyMpv_Type = {
     PyVarObject_HEAD_INIT(NULL, 0)
-    .tp_name = "mpv.MPV",
+    .tp_name = "mpv.Mpv",
     .tp_basicsize = sizeof(PyMpvObject),
     .tp_dealloc = (destructor)PyMpv_dealloc,
     .tp_getattr = (getattrfunc)0,
@@ -195,6 +196,12 @@ mpv_extension_ok(PyObject *self, PyObject *args)
     return Py_NewRef(Py_True);
 }
 
+static void
+handle_log(PyObject *mpv, PyObject *args)
+{
+    // call script_log
+    return Py_NewRef(Py_NotImplemented);
+}
 
 static void
 startup(PyObject *self, PyObject *args)
@@ -211,12 +218,6 @@ startup(PyObject *self, PyObject *args)
         char *script;
         PyObject *_script = PyList_GetItem(scripts, i);
         PyArg_Parse(_script, "s", &script);
-
-        // char *default_script = "generated/player/python/defaults.py.inc";
-        // FILE *fp = fopen(default_script, "r");
-        // PyRun_File(fp, PyUnicode_DecodeFSDefault(default_script), Py_file_input, globals, locals);
-        // fclose(fp);
-
         PyObject *file_exist = PyObject_CallOneArg(exists, _script);
         if (file_exist == Py_True) {
             FILE *fp = fopen(script, "r");
@@ -265,6 +266,8 @@ static PyMethodDef Mpv_methods[] = {
      PyDoc_STR("Just a test method to see if extending is working.")},
     {"startup", (PyCFunction)startup, METH_VARARGS,
      PyDoc_STR("The main long running python thread.")},
+    {"handle_log", (PyCFunction)handle_log, METH_VARARGS,
+     PyDoc_STR("handles log records emitted from python thread.")},
     {NULL, NULL, 0, NULL}                                                     /* Sentinal */
 };
 
@@ -283,6 +286,9 @@ pympv_exec(PyObject *m)
     int rc = PyModule_AddType(m, (PyTypeObject *)MpvError);
     Py_DECREF(MpvError);
     if (rc < 0)
+        return -1;
+
+    if (PyModule_AddType(m, &PyMpv_Type) < 0)
         return -1;
 
     return 0;
@@ -350,9 +356,21 @@ static int s_load_python(struct mp_script_args *args)
 
     PyMpvObject *pyMpv = PyObject_New(PyMpvObject, &PyMpv_Type);
     pyMpv->client = args->client;
+    pyMpv->log = args->log;
     PyTuple_SetItem(tArgs, 1, pyMpv);
 
     PyDict_SetItemString(tParams, "args", tArgs);
+
+    // ========================================================================
+    PyObject *globals = PyDict_New();
+    PyObject *locals = PyDict_New();
+    PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
+    PyDict_SetItemString(globals, "mpv", pympv);
+    char *default_script = builtin_files[0][1];
+    PyRun_String(default_script, Py_file_input, globals, locals);
+    Py_DECREF(globals);
+    Py_DECREF(locals);
+    // ========================================================================
 
     PyObject *pythread = PyObject_Call(Thread, PyTuple_New(0), tParams);
     PyObject *start_s = PyUnicode_FromString("start");
