@@ -17,5 +17,6 @@ class Mpv:
         return mpv.extension_ok()
 
 
+
 mp = MP = Mpv()
 print(mp.extension_ok())

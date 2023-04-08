@@ -100,6 +100,7 @@ static PyObject *MpvError;
 typedef struct {
     PyObject_HEAD
     PyObject        *pympv_attr;
+    struct mpv_handle *client;
 } PyMpvObject;
 
 static PyTypeObject PyMpv_Type;
@@ -195,9 +196,75 @@ mpv_extension_ok(PyObject *self, PyObject *args)
 }
 
 
+static void
+startup(PyObject *self, PyObject *args)
+{
+    PyObject *scripts = PyTuple_GetItem(args, 0);
+    PyObject *globals = PyDict_New();
+    PyObject *locals = PyDict_New();
+    PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
+    PyDict_SetItemString(globals, "mpv", self);
+    PyObject *os = PyImport_ImportModule("os");
+    PyObject *path = PyObject_GetAttrString(os, "path");
+    PyObject *exists = PyObject_GetAttrString(path, "exists");
+    for (Py_ssize_t i = 0; i < PyList_Size(scripts); ++i) {
+        char *script;
+        PyObject *_script = PyList_GetItem(scripts, i);
+        PyArg_Parse(_script, "s", &script);
+
+        // char *default_script = "generated/player/python/defaults.py.inc";
+        // FILE *fp = fopen(default_script, "r");
+        // PyRun_File(fp, PyUnicode_DecodeFSDefault(default_script), Py_file_input, globals, locals);
+        // fclose(fp);
+
+        PyObject *file_exist = PyObject_CallOneArg(exists, _script);
+        if (file_exist == Py_True) {
+            FILE *fp = fopen(script, "r");
+            PyRun_File(fp, script, Py_file_input, globals, locals);
+            fclose(fp);
+        }
+        Py_DECREF(file_exist);
+        Py_DECREF(_script);
+    }
+    Py_DECREF(os);
+    Py_DECREF(path);
+    Py_DECREF(exists);
+    Py_DECREF(globals);
+    Py_DECREF(locals);
+    Py_DECREF(scripts);
+    PyObject *time = PyImport_ImportModule("time");
+    PyObject *sleep_s = PyUnicode_FromString("sleep");
+    PyObject *ONE = PyLong_FromLong(1);
+    PyMpvObject *pyMpv = PyTuple_GetItem(args, 1);
+    while (true) {
+        mpv_event *event = mpv_wait_event(pyMpv->client, 0);
+        if (event->event_id == MPV_EVENT_SHUTDOWN) {
+            PyObject *threading = PyImport_ImportModule("threading");
+            PyObject *main_thread_s = PyUnicode_FromString("main_thread");
+            PyObject *join_s = PyUnicode_FromString("join");
+            PyObject *main_thread = PyObject_CallMethodNoArgs(threading, main_thread_s);
+            PyObject_CallMethodNoArgs(main_thread, join_s);
+            Py_DECREF(main_thread_s);
+            Py_DECREF(main_thread);
+            Py_DECREF(join_s);
+            Py_DECREF(threading);
+            Py_DECREF(time);
+            Py_DECREF(sleep_s);
+            Py_DECREF(ONE);
+            Py_DECREF(pyMpv);
+            Py_DECREF(args);
+            Py_Finalize();
+        }
+        PyObject_CallMethodOneArg(time, sleep_s, ONE);
+    }
+}
+
+
 static PyMethodDef Mpv_methods[] = {
     {"extension_ok", (PyCFunction)mpv_extension_ok, METH_VARARGS,             /* METH_VARARGS | METH_KEYWORDS (PyObject *self, PyObject *args, PyObject **kwargs) */
      PyDoc_STR("Just a test method to see if extending is working.")},
+    {"startup", (PyCFunction)startup, METH_VARARGS,
+     PyDoc_STR("The main long running python thread.")},
     {NULL, NULL, 0, NULL}                                                     /* Sentinal */
 };
 
@@ -249,6 +316,7 @@ PyInit_mpv(void)
 
 /* ========================================================================== */
 
+
 // Main Entrypoint (We want only one call here.)
 static int s_load_python(struct mp_script_args *args)
 {
@@ -262,47 +330,44 @@ static int s_load_python(struct mp_script_args *args)
     Py_Initialize();
 
     PyObject *pympv = PyImport_ImportModule("mpv");
+    PyObject *startup = PyObject_GetAttrString(pympv, "startup");
 
-    PyObject *globals = PyDict_New();
-    PyObject *locals = PyDict_New();
-    PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
-    PyDict_SetItemString(globals, "mpv", pympv);
+    // ========================= do threading ============================== //
 
-    // char *default_script = "generated/player/python/defaults.py.inc";
-    // FILE *fp = fopen(default_script, "r");
-    // PyRun_File(fp, PyUnicode_DecodeFSDefault(default_script), Py_file_input, globals, locals);
-    // fclose(fp);
-
-    PyObject *scripts = PyTuple_New(args->script_count);
-
-    PyObject *os = PyImport_ImportModule("os");
-    PyObject *path = PyObject_GetAttrString(os, "path");
-    PyObject *exists = PyObject_GetAttrString(path, "exists");
+    PyObject *threading = PyImport_ImportModule("threading");
+    PyObject *Thread = PyObject_GetAttrString(threading, "Thread");
+    PyObject *tParams = PyDict_New();
+    PyDict_SetItemString(tParams, "target", startup);
+    PyObject *pyScripts = PyList_New(0);
 
     char **py_scripts = args->py_scripts;
     for (size_t i = 0; i < args->script_count; i++) {
-
-        PyObject *file = PyUnicode_DecodeFSDefault(py_scripts[i]);
-        PyObject *file_exist = PyObject_CallOneArg(exists, file);
-        if (file_exist == Py_True) {
-            FILE *fp = fopen(py_scripts[i], "r");
-            PyRun_File(fp, py_scripts[i], Py_file_input, globals, locals);
-            fclose(fp);
-        }
-        Py_DECREF(file);
-        Py_DECREF(file_exist);
+        PyList_Append(pyScripts, PyUnicode_DecodeFSDefault(py_scripts[i]));
     }
 
-    Py_DECREF(os);
-    Py_DECREF(path);
-    Py_DECREF(globals);
-    Py_DECREF(locals);
-    Py_DECREF(pympv);
+    PyObject *tArgs = PyTuple_New(2);
+    PyTuple_SetItem(tArgs, 0, pyScripts);
 
-    if (Py_FinalizeEx() < 0) {
+    PyMpvObject *pyMpv = PyObject_New(PyMpvObject, &PyMpv_Type);
+    pyMpv->client = args->client;
+    PyTuple_SetItem(tArgs, 1, pyMpv);
 
-        goto error_out;
-    }
+    PyDict_SetItemString(tParams, "args", tArgs);
+
+    PyObject *pythread = PyObject_Call(Thread, PyTuple_New(0), tParams);
+    PyObject *start_s = PyUnicode_FromString("start");
+    PyObject_CallMethodNoArgs(pythread, start_s);
+    Py_DECREF(start_s);
+    Py_DECREF(pythread);
+
+    Py_DECREF(tParams);
+    Py_DECREF(Thread);
+    Py_DECREF(threading);
+
+    Py_DECREF(startup);
+    // if (Py_FinalizeEx() < 0) {
+    //     goto error_out;
+    // }
 
     r = 0;
 
@@ -323,8 +388,8 @@ error_out:
     // Py_EndInterpreter(sub_interp);  // Delete the sub-interpreter
     // if (r)
     //     MP_FATAL(ctx, "%s\n", "Python Initialization Error");
-    if (Py_IsInitialized())
-        Py_Finalize();
+    // if (Py_IsInitialized())
+    //     Py_Finalize();
     // Py_TYPE(ctx)->tp_free((PyObject*)ctx);
     return r;
 }
