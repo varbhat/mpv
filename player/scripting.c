@@ -271,6 +271,8 @@ void mp_load_builtin_scripts(struct MPContext *mpctx)
                         "@auto_profiles.lua");
 }
 
+#if HAVE_PYTHON
+
 static int64_t mp_load_python_scripts(struct MPContext *mpctx, char **py_scripts, size_t script_count)
 {
     char *ext = "py";
@@ -323,11 +325,13 @@ static int64_t mp_load_python_scripts(struct MPContext *mpctx, char **py_scripts
 
     return id;
 }
+#endif
 
 bool mp_load_scripts(struct MPContext *mpctx)
 {
     bool ok = true;
 
+#if HAVE_PYTHON
     size_t py_file_count = 0;
     size_t py_scripts_array_size = 2;
     char **py_scripts = talloc_array(NULL, char *, py_scripts_array_size);
@@ -346,12 +350,17 @@ bool mp_load_scripts(struct MPContext *mpctx)
         }
         return false;
     }
-
+#endif
     // Load scripts from options
     char **files = mpctx->opts->script_files;
     for (int n = 0; files && files[n]; n++) {
-        if (files[n][0] && !put_in_py_scripts(files[n]))
-            ok &= mp_load_user_script(mpctx, files[n]) >= 0;
+        if (files[n][0]) {
+#if HAVE_PYTHON
+            if (!put_in_py_scripts(files[n]))
+#endif
+                ok &= mp_load_user_script(mpctx, files[n]) >= 0;
+
+        }
     }
     if (!mpctx->opts->auto_load_scripts)
         return ok;
@@ -362,14 +371,18 @@ bool mp_load_scripts(struct MPContext *mpctx)
     for (int i = 0; scriptsdir && scriptsdir[i]; i++) {
         files = list_script_files(tmp, scriptsdir[i]);
         for (int n = 0; files && files[n]; n++) {
+#if HAVE_PYTHON
             if (!put_in_py_scripts(files[n]))
+#endif
                 ok &= mp_load_script(mpctx, files[n]) >= 0;
         }
     }
     talloc_free(tmp);
 
+#if HAVE_PYTHON
     ok &= mp_load_python_scripts(mpctx, py_scripts, py_file_count) >= 0;
     talloc_free(py_scripts);
+#endif
 
     return ok;
 }
