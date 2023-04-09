@@ -111,9 +111,11 @@ static PyObject *MpvError;
 
 typedef struct {
     PyObject_HEAD
-    PyObject        *pympv_attr;
+    struct MPContext *mpctx;
     struct mpv_handle *client;
     struct mp_log *log;
+    struct stats_ctx *stats;
+    PyObject        *pympv_attr;
     PyThreadState *threadState;
 } PyMpvObject;
 
@@ -289,11 +291,25 @@ handle_log(PyObject *mpv, PyObject *args)
 }
 
 
+static PyObject *
+create_stats(PyObject *mpv, PyObject *args)
+{
+    PyMpvObject *pyMpv = (PyMpvObject *)PyObject_GetAttrString(mpv, "context");
+    pyMpv->stats = stats_ctx_create(pyMpv, pyMpv->mpctx->global,
+                    mp_tprintf(80, "script/%s", mpv_client_name(pyMpv->client)));
+    stats_register_thread_cputime(pyMpv->stats, "cpu");
+    Py_DECREF(pyMpv);
+    Py_RETURN_NONE;
+}
+
+
 static PyMethodDef Mpv_methods[] = {
     {"extension_ok", (PyCFunction)mpv_extension_ok, METH_VARARGS,             /* METH_VARARGS | METH_KEYWORDS (PyObject *self, PyObject *args, PyObject **kwargs) */
      PyDoc_STR("Just a test method to see if extending is working.")},
     {"wait_event", (PyCFunction)pympv_wait_event, METH_VARARGS,
      PyDoc_STR("Wrapper around the mpv_wait_event")},
+    {"create_stats", (PyCFunction)create_stats, METH_VARARGS,
+     PyDoc_STR("Creates whatever the hell the 'stats' is!")},
     {"shutdown", (PyCFunction)interpreter_shutdown, METH_VARARGS,
      PyDoc_STR("Shuts down the python interpreter responsible for the current thread.")},
     {"handle_log", (PyCFunction)handle_log, METH_VARARGS,
@@ -386,7 +402,7 @@ static int s_load_python(struct mp_script_args *args)
     pyMpv->client = args->client;
     pyMpv->log = args->log;
     pyMpv->threadState = threadState;
-
+    pyMpv->mpctx = args->mpctx;
     if (PyModule_AddObjectRef(pympv, "context", (PyObject *)pyMpv) < 0) {
         fprintf(stderr, "Error: %s.\n", "cound not set up context for the module mpv");
         Py_EndInterpreter(threadState);
@@ -397,6 +413,7 @@ static int s_load_python(struct mp_script_args *args)
     PyObject *locals = PyDict_New();
     PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
     PyDict_SetItemString(globals, "mpv", pympv);
+    PyDict_SetItemString(globals, "client_name", PyUnicode_DecodeFSDefault(mpv_client_name(args->client)));
     const char *default_script = builtin_files[0][1];
     PyRun_String(default_script, Py_file_input, globals, locals);
 

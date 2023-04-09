@@ -84,6 +84,7 @@ class Mpv:
         threading.Thread(target=self.run).start()
 
     def run(self):
+        mpv.create_stats()
         self.wait_events()
         self.shutdown()
 
