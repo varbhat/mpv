@@ -278,7 +278,7 @@ bool mp_load_scripts(struct MPContext *mpctx)
 #if HAVE_PYTHON
     for (int n = 0; scripting_backends[n]; n++) {
         const struct mp_scripting *b = scripting_backends[n];
-        if (ext && strcasecmp("py", b->file_ext) == 0) {
+        if (strcasecmp("py", b->file_ext) == 0) {
             ok &= b->init_sequence() >= 0;
             break;
         }

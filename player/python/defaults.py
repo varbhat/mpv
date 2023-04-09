@@ -13,10 +13,16 @@ MPV_EVENT_WAIT_TIMEOUT = 1
 class MpvHandler(logging.StreamHandler):
 
     def emit(self, record):
-        mpv.handle_log(record);
+        lname = record.levelname.lower()
+        if lname == 'warning':
+            lname = 'warn'
+        if lname == 'critical':
+            lname = 'fatal'
+        mpv.handle_log([lname, str(record.msg)]);
 
 
 logging.root.addHandler(MpvHandler())
+logging.root.setLevel(logging.DEBUG)
 
 from enum import IntEnum
 
@@ -63,6 +69,7 @@ class Mpv:
             condition has been satisfied.
         """
         if event_id == mpv_event_id.MPV_EVENT_SHUTDOWN:
+            logging.warning(f"mpv event id: {event_id}")
             return True
         return False
 

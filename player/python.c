@@ -94,7 +94,6 @@ static PyTypeObject PyScriptCtx_Type = {
     .tp_doc = "script_ctx object",
 };
 
-
 /*
 * Separation of concern
 * =====================
@@ -213,17 +212,18 @@ static PyObject *
 pympv_wait_event(PyObject *mpv, PyObject *args)
 {
     PyObject *timeout = PyTuple_GetItem(args, 0);
-    PyMpvObject *pyMpv = PyObject_GetAttrString(mpv, "context");
+    PyMpvObject *pyMpv = (PyMpvObject *)PyObject_GetAttrString(mpv, "context");
     mpv_event *event = mpv_wait_event(pyMpv->client, PyLong_AsLong(timeout));
     Py_DECREF(timeout);
     Py_DECREF(pyMpv);
+
     return PyLong_FromLong(event->event_id);
 }
 
 static void
 interpreter_shutdown(PyObject *mpv, PyObject *args)
 {
-    PyMpvObject *pyMpv = PyObject_GetAttrString(mpv, "context");
+    PyMpvObject *pyMpv = (PyMpvObject *)PyObject_GetAttrString(mpv, "context");
     Py_EndInterpreter(pyMpv->threadState);
 }
 
@@ -233,11 +233,59 @@ mpv_extension_ok(PyObject *self, PyObject *args)
     return Py_NewRef(Py_True);
 }
 
+
+// args: log level, varargs
+static PyObject *script_log(PyMpvObject *pyMpv, PyObject *args)
+{
+    // Parse args to list_obj
+    PyObject* list_obj;
+    if (!PyArg_ParseTuple(args, "O", &list_obj)) {
+        return NULL;
+    }
+    if (!PyList_Check(list_obj)) {
+        PyErr_SetString(PyExc_TypeError, "Argument must be a list of strings");
+        return NULL;
+    }
+    int length = PyList_Size(list_obj);
+
+    if(length<1) {
+        PyErr_SetString(PyExc_TypeError, "Insufficient Args");
+        return NULL;
+    }
+
+    PyObject* log_obj = PyList_GetItem(list_obj, 0);
+    if (!PyUnicode_Check(log_obj)) {
+        PyErr_SetString(PyExc_TypeError, "List must contain only strings");
+        return NULL;
+    }
+
+    int msgl = mp_msg_find_level(PyUnicode_AsUTF8(log_obj));
+    if (msgl < 0) {
+        PyErr_SetString(PyExc_TypeError,PyUnicode_AsUTF8(log_obj));
+        return NULL;
+    }
+
+    if(length>1) {
+        struct mp_log *log = pyMpv->log;
+        for (Py_ssize_t i = 1; i < length; i++) {
+            PyObject* str_obj = PyList_GetItem(list_obj, i);
+            if (!PyUnicode_Check(str_obj)) {
+                PyErr_SetString(PyExc_TypeError, "List must contain only strings");
+                return NULL;
+            }
+            mp_msg(log, msgl, (i == 2 ? "%s" : " %s"), PyUnicode_AsUTF8(str_obj));
+        }
+        mp_msg(log, msgl, "\n");
+    }
+}
+
+
 static void
 handle_log(PyObject *mpv, PyObject *args)
 {
-    // call script_log
-    return Py_NewRef(Py_NotImplemented);
+    PyMpvObject *pyMpv = (PyMpvObject *)PyObject_GetAttrString(mpv, "context");
+    script_log(pyMpv, args);
+    Py_DECREF(pyMpv);
 }
 
 
@@ -296,8 +344,7 @@ static struct PyModuleDef mpv_module_def = {
     NULL
 };
 
-PyMODINIT_FUNC
-PyInit_mpv(void)
+PyMODINIT_FUNC PyInit_mpv(void)
 {
     return PyModuleDef_Init(&mpv_module_def);
 }
@@ -321,7 +368,7 @@ finalize_python(void)
 {
     PyInterpreterState *main = PyInterpreterState_Main();
     PyThreadState *mainThread = PyInterpreterState_ThreadHead(main);
-    PyThreadState_Swap(main);
+    PyThreadState_Swap(mainThread);
     Py_Finalize();
 }
 
@@ -340,13 +387,17 @@ static int s_load_python(struct mp_script_args *args)
     pyMpv->log = args->log;
     pyMpv->threadState = threadState;
 
-    PyModule_AddObject(pympv, "context", pyMpv);
+    if (PyModule_AddObjectRef(pympv, "context", (PyObject *)pyMpv) < 0) {
+        fprintf(stderr, "Error: %s.\n", "cound not set up context for the module mpv");
+        Py_EndInterpreter(threadState);
+        goto error_out;
+    };
 
     PyObject *globals = PyDict_New();
     PyObject *locals = PyDict_New();
     PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
     PyDict_SetItemString(globals, "mpv", pympv);
-    char *default_script = builtin_files[0][1];
+    const char *default_script = builtin_files[0][1];
     PyRun_String(default_script, Py_file_input, globals, locals);
 
     PyObject *os = PyImport_ImportModule("os");
@@ -354,7 +405,7 @@ static int s_load_python(struct mp_script_args *args)
     PyObject *exists = PyObject_GetAttrString(path, "exists");
     Py_DECREF(os);
     Py_DECREF(path);
-    if (PyObject_CallOneArg(exists, PyUnicode_FromFSDefault(args->filename)) == Py_False) {
+    if (PyObject_CallOneArg(exists, PyUnicode_DecodeFSDefault(args->filename)) == Py_False) {
         fprintf(stderr, "Error: %s does not exists.\n", args->filename);
         Py_DECREF(exists);
         Py_EndInterpreter(threadState);
@@ -366,7 +417,7 @@ static int s_load_python(struct mp_script_args *args)
     PyRun_File(fp, args->filename, Py_file_input, globals, locals);
     fclose(fp);
 
-    char *spawn_off_listener = builtin_files[1][1];
+    const char *spawn_off_listener = builtin_files[1][1];
     PyRun_String(spawn_off_listener, Py_file_input, globals, locals);
 
     Py_DECREF(globals);
@@ -494,56 +545,6 @@ static PyObject* script_dummy(PyObject* self, PyObject* args)
 
     int res = 0; // do work
     return check_error(self, res);
-}
-
-/**************************************************************************************************/
-// args: log level, varargs
-static PyObject* script_log(PyObject* self, PyObject* args)
-{
-    PyScriptCtx *ctx= (PyScriptCtx *)self;
-
-    // Parse args to list_obj
-    PyObject* list_obj;
-    if (!PyArg_ParseTuple(args, "O", &list_obj)) {
-        return NULL;
-    }
-    if (!PyList_Check(list_obj)) {
-        PyErr_SetString(PyExc_TypeError, "Argument must be a list of strings");
-        return NULL;
-    }
-    int length = PyList_Size(list_obj);
-
-    if(length<1) {
-        PyErr_SetString(PyExc_TypeError, "Insufficient Args");
-        return NULL;
-    }
-
-    PyObject* log_obj = PyList_GetItem(list_obj, 0);
-    if (!PyUnicode_Check(log_obj)) {
-        PyErr_SetString(PyExc_TypeError, "List must contain only strings");
-        return NULL;
-    }
-
-    int msgl = mp_msg_find_level(PyUnicode_AsUTF8(log_obj));
-    if (msgl < 0) {
-        PyErr_SetString(PyExc_TypeError,PyUnicode_AsUTF8(log_obj));
-        return NULL;
-    }
-
-    if(length>1) {
-        struct mp_log *log = ctx->log;
-        for (Py_ssize_t i = 1; i < length; i++) {
-            PyObject* str_obj = PyList_GetItem(list_obj, i);
-            if (!PyUnicode_Check(str_obj)) {
-                PyErr_SetString(PyExc_TypeError, "List must contain only strings");
-                return NULL;
-            }
-            mp_msg(log, msgl, (i == 2 ? "%s" : " %s"), PyUnicode_AsUTF8(str_obj));
-        }
-        mp_msg(log, msgl, "\n");
-    }
-
-    Py_RETURN_NONE;
 }
 
 // args: string -> string
