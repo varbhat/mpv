@@ -65,6 +65,9 @@ static const char *const builtin_files[][3] = {
     {"@/defaults.py",
 #   include "generated/player/python/defaults.py.inc"
     },
+    {"@/spawn_off_listener.py",
+#   include "generated/player/python/spawn_off_listener.py.inc"
+    },
     {0}
 };
 
@@ -92,6 +95,16 @@ static PyTypeObject PyScriptCtx_Type = {
 };
 
 
+/*
+* Separation of concern
+* =====================
+*
+* * Initialize python as a part of the core. (call Py_Initialize)
+* * Run scripts in sub interpreters
+* * Let the sub interpreters spawn their own thread and release the main thread
+* * Let the interpreters destroy them selves on MPV_EVENT_SHUTDOWN
+* * Shutdown python on mp_destroy. (call Py_Finalize)
+*/
 // module and type def
 /* ========================================================================== */
 
@@ -102,6 +115,7 @@ typedef struct {
     PyObject        *pympv_attr;
     struct mpv_handle *client;
     struct mp_log *log;
+    PyThreadState *threadState;
 } PyMpvObject;
 
 static PyTypeObject PyMpv_Type;
@@ -190,6 +204,29 @@ static PyTypeObject PyMpv_Type = {
     .tp_methods = PyMpv_methods,
 };
 
+
+/*
+* args[1]: DEFAULT_TIMEOUT
+* returns: PyLongObject event_id
+*/
+static PyObject *
+pympv_wait_event(PyObject *mpv, PyObject *args)
+{
+    PyObject *timeout = PyTuple_GetItem(args, 0);
+    PyMpvObject *pyMpv = PyObject_GetAttrString(mpv, "context");
+    mpv_event *event = mpv_wait_event(pyMpv->client, PyLong_AsLong(timeout));
+    Py_DECREF(timeout);
+    Py_DECREF(pyMpv);
+    return PyLong_FromLong(event->event_id);
+}
+
+static void
+interpreter_shutdown(PyObject *mpv, PyObject *args)
+{
+    PyMpvObject *pyMpv = PyObject_GetAttrString(mpv, "context");
+    Py_EndInterpreter(pyMpv->threadState);
+}
+
 static PyObject *
 mpv_extension_ok(PyObject *self, PyObject *args)
 {
@@ -203,69 +240,14 @@ handle_log(PyObject *mpv, PyObject *args)
     return Py_NewRef(Py_NotImplemented);
 }
 
-static void
-startup(PyObject *self, PyObject *args)
-{
-    PyObject *scripts = PyTuple_GetItem(args, 0);
-    PyObject *globals = PyDict_New();
-    PyObject *locals = PyDict_New();
-    PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
-    PyDict_SetItemString(globals, "mpv", self);
-    PyObject *os = PyImport_ImportModule("os");
-    PyObject *path = PyObject_GetAttrString(os, "path");
-    PyObject *exists = PyObject_GetAttrString(path, "exists");
-    for (Py_ssize_t i = 0; i < PyList_Size(scripts); ++i) {
-        char *script;
-        PyObject *_script = PyList_GetItem(scripts, i);
-        PyArg_Parse(_script, "s", &script);
-        PyObject *file_exist = PyObject_CallOneArg(exists, _script);
-        if (file_exist == Py_True) {
-            FILE *fp = fopen(script, "r");
-            PyRun_File(fp, script, Py_file_input, globals, locals);
-            fclose(fp);
-        }
-        Py_DECREF(file_exist);
-        Py_DECREF(_script);
-    }
-    Py_DECREF(os);
-    Py_DECREF(path);
-    Py_DECREF(exists);
-    Py_DECREF(globals);
-    Py_DECREF(locals);
-    Py_DECREF(scripts);
-    PyObject *time = PyImport_ImportModule("time");
-    PyObject *sleep_s = PyUnicode_FromString("sleep");
-    PyObject *ONE = PyLong_FromLong(1);
-    PyMpvObject *pyMpv = PyTuple_GetItem(args, 1);
-    while (true) {
-        mpv_event *event = mpv_wait_event(pyMpv->client, 0);
-        if (event->event_id == MPV_EVENT_SHUTDOWN) {
-            PyObject *threading = PyImport_ImportModule("threading");
-            PyObject *main_thread_s = PyUnicode_FromString("main_thread");
-            PyObject *join_s = PyUnicode_FromString("join");
-            PyObject *main_thread = PyObject_CallMethodNoArgs(threading, main_thread_s);
-            PyObject_CallMethodNoArgs(main_thread, join_s);
-            Py_DECREF(main_thread_s);
-            Py_DECREF(main_thread);
-            Py_DECREF(join_s);
-            Py_DECREF(threading);
-            Py_DECREF(time);
-            Py_DECREF(sleep_s);
-            Py_DECREF(ONE);
-            Py_DECREF(pyMpv);
-            Py_DECREF(args);
-            Py_Finalize();
-        }
-        PyObject_CallMethodOneArg(time, sleep_s, ONE);
-    }
-}
-
 
 static PyMethodDef Mpv_methods[] = {
     {"extension_ok", (PyCFunction)mpv_extension_ok, METH_VARARGS,             /* METH_VARARGS | METH_KEYWORDS (PyObject *self, PyObject *args, PyObject **kwargs) */
      PyDoc_STR("Just a test method to see if extending is working.")},
-    {"startup", (PyCFunction)startup, METH_VARARGS,
-     PyDoc_STR("The main long running python thread.")},
+    {"wait_event", (PyCFunction)pympv_wait_event, METH_VARARGS,
+     PyDoc_STR("Wrapper around the mpv_wait_event")},
+    {"shutdown", (PyCFunction)interpreter_shutdown, METH_VARARGS,
+     PyDoc_STR("Shuts down the python interpreter responsible for the current thread.")},
     {"handle_log", (PyCFunction)handle_log, METH_VARARGS,
      PyDoc_STR("handles log records emitted from python thread.")},
     {NULL, NULL, 0, NULL}                                                     /* Sentinal */
@@ -322,70 +304,74 @@ PyInit_mpv(void)
 
 /* ========================================================================== */
 
+static int
+initialize_python(void)
+{
+    if (PyImport_AppendInittab("mpv", PyInit_mpv) == -1) {
+        fprintf(stderr, "Error: could not extend in-built modules table\n");
+        return -1;
+    }
+
+    Py_Initialize();
+    return 0;
+}
+
+static void
+finalize_python(void)
+{
+    PyInterpreterState *main = PyInterpreterState_Main();
+    PyThreadState *mainThread = PyInterpreterState_ThreadHead(main);
+    PyThreadState_Swap(main);
+    Py_Finalize();
+}
 
 // Main Entrypoint (We want only one call here.)
 static int s_load_python(struct mp_script_args *args)
 {
     int r = -1;
 
-    if (PyImport_AppendInittab("mpv", PyInit_mpv) == -1) {
-        fprintf(stderr, "Error: could not extend in-built modules table\n");
-        goto error_out;
-    }
+    PyThreadState *threadState = Py_NewInterpreter();
 
-    Py_Initialize();
+    PyThreadState_Swap(threadState);
 
     PyObject *pympv = PyImport_ImportModule("mpv");
-    PyObject *startup = PyObject_GetAttrString(pympv, "startup");
-
-    // ========================= do threading ============================== //
-
-    PyObject *threading = PyImport_ImportModule("threading");
-    PyObject *Thread = PyObject_GetAttrString(threading, "Thread");
-    PyObject *tParams = PyDict_New();
-    PyDict_SetItemString(tParams, "target", startup);
-    PyObject *pyScripts = PyList_New(0);
-
-    char **py_scripts = args->py_scripts;
-    for (size_t i = 0; i < args->script_count; i++) {
-        PyList_Append(pyScripts, PyUnicode_DecodeFSDefault(py_scripts[i]));
-    }
-
-    PyObject *tArgs = PyTuple_New(2);
-    PyTuple_SetItem(tArgs, 0, pyScripts);
-
     PyMpvObject *pyMpv = PyObject_New(PyMpvObject, &PyMpv_Type);
     pyMpv->client = args->client;
     pyMpv->log = args->log;
-    PyTuple_SetItem(tArgs, 1, pyMpv);
+    pyMpv->threadState = threadState;
 
-    PyDict_SetItemString(tParams, "args", tArgs);
+    PyModule_AddObject(pympv, "context", pyMpv);
 
-    // ========================================================================
     PyObject *globals = PyDict_New();
     PyObject *locals = PyDict_New();
     PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
     PyDict_SetItemString(globals, "mpv", pympv);
     char *default_script = builtin_files[0][1];
     PyRun_String(default_script, Py_file_input, globals, locals);
+
+    PyObject *os = PyImport_ImportModule("os");
+    PyObject *path = PyObject_GetAttrString(os, "path");
+    PyObject *exists = PyObject_GetAttrString(path, "exists");
+    Py_DECREF(os);
+    Py_DECREF(path);
+    if (PyObject_CallOneArg(exists, PyUnicode_FromFSDefault(args->filename)) == Py_False) {
+        fprintf(stderr, "Error: %s does not exists.\n", args->filename);
+        Py_DECREF(exists);
+        Py_EndInterpreter(threadState);
+        goto error_out;
+    }
+    Py_DECREF(exists);
+
+    FILE *fp = fopen(args->filename, "r");
+    PyRun_File(fp, args->filename, Py_file_input, globals, locals);
+    fclose(fp);
+
+    char *spawn_off_listener = builtin_files[1][1];
+    PyRun_String(spawn_off_listener, Py_file_input, globals, locals);
+
     Py_DECREF(globals);
     Py_DECREF(locals);
-    // ========================================================================
 
-    PyObject *pythread = PyObject_Call(Thread, PyTuple_New(0), tParams);
-    PyObject *start_s = PyUnicode_FromString("start");
-    PyObject_CallMethodNoArgs(pythread, start_s);
-    Py_DECREF(start_s);
-    Py_DECREF(pythread);
-
-    Py_DECREF(tParams);
-    Py_DECREF(Thread);
-    Py_DECREF(threading);
-
-    Py_DECREF(startup);
-    // if (Py_FinalizeEx() < 0) {
-    //     goto error_out;
-    // }
 
     r = 0;
 
@@ -857,4 +843,6 @@ const struct mp_scripting mp_scripting_py = {
     .file_ext = "py",
     .load = s_load_python,
     .no_thread = true,
+    .init_sequence = initialize_python,
+    .shutdown_sequence = finalize_python,
 };
