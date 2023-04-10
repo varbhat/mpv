@@ -25,7 +25,7 @@ logger.addHandler(MpvHandler())
 logger.setLevel(logging.DEBUG)
 logger.propagate = False
 
-logger.info("logger set")
+logger.debug("logger set")
 
 class events(IntEnum):
     MPV_EVENT_NONE = 0
@@ -65,25 +65,24 @@ class MainLoop:
             boolean specifing whether some event loop breaking
             condition has been satisfied.
         """
+        # logger.warning(f"received event #{event_id}")
         # if event_id == events.MPV_EVENT_SHUTDOWN:
-        logger.warning(f"received event #{event_id}")
         if event_id == 1:
-            # logging.warning(f"mpv event id: {event_id}")
+            print("shutting down python")
             return True
         return False
 
     def wait_events(self):
         while True:
-            if self.handle_event(mpvmainloop.wait_event(0)):
+            event_id = mpvmainloop.wait_event(1)
+            if self.handle_event(event_id):
                 break
-            time.sleep(MPV_EVENT_WAIT_TIMEOUT)
 
     def run_in_separate_thread(self):
         self.thread = True
         threading.Thread(target=self.run).start()
 
     def run(self):
-        # mpv.create_stats()
         self.wait_events()
         self.shutdown()
 
@@ -91,8 +90,8 @@ class MainLoop:
         if self.thread:
             main_thread = threading.main_thread()
             main_thread.join()
-        mpv.shutdown()
-logger.warning("running main loop")
+        mpvmainloop.shutdown()
 clss = globals()['clients']
 ml = MainLoop(clss)
+logger.debug("running main loop")
 ml.run()

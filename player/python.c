@@ -217,14 +217,18 @@ mpvmainloop_wait_event(PyObject *mpvmainloop, PyObject *args)
     mpv_event *event = mpv_wait_event(ctx->client, PyLong_AsLong(timeout));
     Py_DECREF(timeout);
     Py_DECREF(ctx);
-    return PyLong_FromLong(event->event_id);
+    PyObject *ret = PyLong_FromLong(event->event_id);
+    return ret;
 }
 
-static void
-interpreter_shutdown(PyObject *mpv, PyObject *args)
+static PyObject *
+mainloop_shutdown(PyObject *mpvmainloop, PyObject *args)
 {
-    PyMpvObject *pyMpv = (PyMpvObject *)PyObject_GetAttrString(mpv, "context");
-    Py_EndInterpreter(pyMpv->threadState);
+    PyScriptCtx *ctx = (PyScriptCtx *)PyObject_GetAttrString(mpvmainloop, "context");
+    for (size_t i = 0; i < ctx->script_count; i++) {
+        Py_EndInterpreter(threads[i]);
+    }
+    Py_RETURN_NONE;
 }
 
 static PyObject *
@@ -302,8 +306,6 @@ mainloop_log_handle(PyObject *mpvmainloop, PyObject *args)
 static PyMethodDef Mpv_methods[] = {
     {"extension_ok", (PyCFunction)mpv_extension_ok, METH_VARARGS,             /* METH_VARARGS | METH_KEYWORDS (PyObject *self, PyObject *args, PyObject **kwargs) */
      PyDoc_STR("Just a test method to see if extending is working.")},
-    {"shutdown", (PyCFunction)interpreter_shutdown, METH_VARARGS,
-     PyDoc_STR("Shuts down the python interpreter responsible for the current thread.")},
     {"handle_log", (PyCFunction)handle_log, METH_VARARGS,
      PyDoc_STR("handles log records emitted from python thread.")},
     {NULL, NULL, 0, NULL}                                                     /* Sentinal */
@@ -377,6 +379,8 @@ static PyMethodDef MpvMainLoop_methods[] = {
      PyDoc_STR("Wrapper around the mpv_wait_event")},
     {"get_client_threadState", (PyCFunction)get_client_threadState, METH_VARARGS,
      PyDoc_STR("Returns the client threadState given a client name")},
+    {"shutdown", (PyCFunction)mainloop_shutdown, METH_VARARGS,
+     PyDoc_STR("Shuts down the python interpreter responsible for the current thread.")},
     {"handle_log", (PyCFunction)mainloop_log_handle, METH_VARARGS,
      PyDoc_STR("handles log records emitted from python thread.")},
     {NULL, NULL, 0, NULL}
@@ -449,7 +453,6 @@ initialize_python(PyScriptCtx *ctx)
         PyThreadState *threadState = Py_NewInterpreter();
         mainThread = PyEval_SaveThread();
         PyEval_RestoreThread(threadState);
-        // mainThread = PyThreadState_Swap(threadState);
         if (mainThread == NULL) {
             mp_msg(ctx->log, mp_msg_find_level("error"), "Error: %s.\n", "Could not switch thread");
             return -1;
@@ -516,10 +519,6 @@ initialize_python(PyScriptCtx *ctx)
     }
     talloc_free(ctx->scripts);
 
-    // ctx->stats = stats_ctx_create(ctx, ctx->mpctx->global,
-    //     mp_tprintf(80, "script/%s", mpv_client_name(ctx->client)));
-    //
-    // stats_register_thread_cputime(ctx->stats, "cpu");
 
     PyObject *mpvmainloop = PyImport_ImportModule("mpvmainloop");
     if (PyModule_AddObjectRef(mpvmainloop, "context", (PyObject *)ctx) < 0) {
@@ -548,13 +547,6 @@ initialize_python(PyScriptCtx *ctx)
     return 0;
 }
 
-static void
-finalize_python(void)
-{
-    PyThreadState_Swap(mainThread);
-    Py_Finalize();
-}
-
 // Main Entrypoint (We want only one call here.)
 static int s_load_python(struct mp_script_args *args)
 {
@@ -565,26 +557,12 @@ static int s_load_python(struct mp_script_args *args)
     ctx->scripts = args->py_scripts;
     ctx->script_count = args->script_count;
 
-    // ctx->stats = stats_ctx_create(ctx, args->mpctx->global,
-    //     mp_tprintf(80, "script/%s", mpv_client_name(args->client)));
-    //
-    // stats_register_thread_cputime(ctx->stats, "cpu");
-    initialize_python(ctx);
-    mp_msg(ctx->log, mp_msg_find_level("error"), "%s\n", "exiting out of python");
-//
-//
-//     r = 0;
-//
-// error_out:
-//     // PyThreadState_Swap(NULL);  // Switch back to the main interpreter
-//
-//     // Py_EndInterpreter(sub_interp);  // Delete the sub-interpreter
-//     // if (r)
-//     //     MP_FATAL(ctx, "%s\n", "Python Initialization Error");
-//     // if (Py_IsInitialized())
-//     //     Py_Finalize();
-//     // Py_TYPE(ctx)->tp_free((PyObject*)ctx);
-//     return r;
+    if (initialize_python(ctx) < 0) {
+        return -1;
+    };
+
+    Py_Finalize();
+    return 0;
 }
 
 

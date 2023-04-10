@@ -30,7 +30,7 @@ for handler in logging.root.handlers:
 logging.root.addHandler(MpvHandler())
 logging.root.setLevel(logging.DEBUG)
 
-logging.warning(f"initiating {mpv.client_name}")
+logging.debug(f"initiating {mpv.client_name}")
 
 class Mpv:
     """
@@ -49,4 +49,4 @@ class Mpv:
         return mpv.extension_ok()
 
 mpv.mpv = Mpv()
-logging.warning(f"okay from extension: {mpv.extension_ok()}")
+logging.debug(f"okay from extension: {mpv.extension_ok()}")
