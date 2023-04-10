@@ -620,16 +620,16 @@ struct mp_script_args {
     struct mpv_handle *client;
     const char *filename;
     const char *path;
+#if HAVE_PYTHON
+    char **py_scripts;
+    size_t script_count;
+#endif
 };
 struct mp_scripting {
     const char *name;       // e.g. "lua script"
     const char *file_ext;   // e.g. "lua"
     bool no_thread;         // don't run load() on dedicated thread
     int (*load)(struct mp_script_args *args);
-#if HAVE_PYTHON
-    int (*init_sequence)(void);
-    void (*shutdown_sequence)(void);
-#endif
 };
 bool mp_load_scripts(struct MPContext *mpctx);
 void mp_load_builtin_scripts(struct MPContext *mpctx);
